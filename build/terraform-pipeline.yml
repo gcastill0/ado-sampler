@@ -1,0 +1,83 @@
+trigger:
+  branches:
+    include:
+    - master
+  paths:
+    include:
+    - terraform
+    - build
+
+variables:
+- name: terraform_state_exists
+  value: 0
+
+pool:
+  vmImage: 'ubuntu-latest'
+  
+steps:
+- task: DownloadBuildArtifacts@1
+  inputs:
+    buildType: 'specific'
+    project: 'hashicorp-ado-sample'
+    pipeline: '31'
+    specificBuildWithTriggering: true
+    buildVersionToDownload: 'latest'
+    allowPartiallySucceededBuilds: true
+    downloadType: 'single'
+    artifactName: 'terraform_state'
+    downloadPath: '$(System.ArtifactsDirectory)'
+  continueOnError: true
+  
+- task: Bash@3
+  inputs:
+    targetType: 'inline'
+    script: |
+      printenv
+      export DIR=terraform_state
+      cd $(System.ArtifactsDirectory)
+      if [ -d $DIR ]; then
+        terraform_state_exists=1
+        echo 'vso[task.setvariable variable=terraform_state_exists]$terraform_state_exists'
+      fi
+      echo $(terraform_state_exists)
+      ls -ltR
+      pwd
+
+- task: CopyFiles@2
+  displayName: 'Create IaC Artifact'
+  inputs:
+    SourceFolder: terraform
+    TargetFolder: '$(Build.ArtifactStagingDirectory)/terraform'
+
+- task: Bash@3
+  inputs:
+    targetType: 'inline'
+    script: |
+      mkdir $(Build.ArtifactStagingDirectory)/terraform_state
+      cd $(Build.ArtifactStagingDirectory)/terraform
+      terraform init
+      # if [ "$(terraform_state_exists)" -eq "1" ]; then
+        cp $(System.ArtifactsDirectory)/terraform_state/terraform.tfstate .
+      # fi
+      terraform apply -auto-approve
+      mv $(Build.ArtifactStagingDirectory)/terraform/terraform.tfstate $(Build.ArtifactStagingDirectory)/terraform_state/.
+  continueOnError: true
+  env:
+    ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+    ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+    ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+    ARM_TENANT_ID: $(ARM_TENANT_ID)
+  displayName: 'Load target platform variables and build'
+
+- task: CopyFiles@2
+  inputs:
+    contents: '_buildOutput/**'
+    targetFolder: $(Build.ArtifactStagingDirectory)/terraform_state
+  displayName: 'Copy terraform.tfstate to localized artifact'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathToPublish: $(Build.ArtifactStagingDirectory)/terraform_state
+    artifactName: terraform_state
+  displayName: 'Publish build artifact with terraform.tfstate'
+
